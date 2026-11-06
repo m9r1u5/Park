@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#0f1216">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Park Finder">
+<title>Park Finder</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- ============ HOME ============ -->
+<main id="screen-home" class="screen active" aria-label="Home">
+  <header class="topbar">
+    <div class="brand"><span class="brand-p">P</span> Park Finder</div>
+    <div id="mode-pill" class="pill" hidden></div>
+  </header>
+
+  <!-- Not parked -->
+  <section id="home-empty" class="home-body">
+    <p class="lead">Tap when you leave the car. I'll count your steps and direction, so I can lead you back even with no GPS.</p>
+    <button id="btn-park" class="mega">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 11l1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11v6a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-1H8v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1v-6zm2.2-1h9.6l-1-3H8.2l-1 3zM7.5 14a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5zm9 0a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5z"/></svg>
+      I've Parked
+    </button>
+    <p class="hint" id="hold-hint">Hold the phone in your hand, top pointing where you walk, for the best direction.</p>
+  </section>
+
+  <!-- Parked -->
+  <section id="home-parked" class="home-body" hidden>
+    <div class="card car-card">
+      <div class="car-row">
+        <div>
+          <div class="label">Parked</div>
+          <div id="parked-when" class="big"></div>
+        </div>
+        <img id="parked-photo" class="thumb" alt="Parking photo" hidden>
+      </div>
+      <div id="parked-meta" class="meta"></div>
+      <div class="stats">
+        <div><span id="st-dist">0</span><small id="st-dist-u">m away</small></div>
+        <div><span id="st-steps">0</span><small>steps</small></div>
+        <div><span id="st-floor">0</span><small>levels</small></div>
+      </div>
+      <div id="tracking-line" class="tracking-line"></div>
+    </div>
+
+    <div id="timer-card" class="card timer-card" hidden>
+      <div class="label">Parking time left</div>
+      <div id="timer-left" class="big mono">--:--</div>
+      <button id="btn-timer-clear" class="link">Clear timer</button>
+    </div>
+
+    <button id="btn-find" class="mega find">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l7 19-7-4-7 4z"/></svg>
+      Find My Car
+    </button>
+    <div class="row2">
+      <button id="btn-timer" class="secondary">⏱ Timer</button>
+      <button id="btn-pause" class="secondary">Stop tracking</button>
+    </div>
+    <button id="btn-found-home" class="link danger">I'm back at the car — finish</button>
+  </section>
+</main>
+
+<!-- ============ FIND ============ -->
+<main id="screen-find" class="screen" aria-label="Find my car">
+  <header class="topbar">
+    <button id="btn-find-back" class="icon-btn" aria-label="Back">←</button>
+    <div class="title">Find My Car</div>
+    <div id="acc-pill" class="pill">—</div>
+  </header>
+
+  <div class="find-top">
+    <div class="arrow-wrap">
+      <div id="arrow" class="arrow">
+        <svg viewBox="0 0 100 100" aria-hidden="true"><path d="M50 6 L82 88 L50 70 L18 88 Z"/></svg>
+      </div>
+      <div id="arrow-note" class="arrow-note"></div>
+    </div>
+    <div class="find-readout">
+      <div id="find-dist" class="huge">—</div>
+      <div id="find-sub" class="sub"></div>
+      <div id="find-floor" class="floor-line"></div>
+    </div>
+  </div>
+
+  <div class="floor-adjust">
+    <span>Level change</span>
+    <button id="btn-floor-down" class="chip" aria-label="I went down a level">▼ Down</button>
+    <button id="btn-floor-up" class="chip" aria-label="I went up a level">▲ Up</button>
+  </div>
+
+  <div class="map-wrap">
+    <canvas id="map" aria-label="Your walked trail"></canvas>
+    <div class="map-tools">
+      <button id="btn-fit" class="chip">Fit</button>
+      <button id="btn-retrace" class="chip">Retrace path</button>
+    </div>
+    <div id="map-legend" class="map-legend"></div>
+  </div>
+
+  <div class="find-actions">
+    <button id="btn-maps" class="secondary" hidden>Open in Maps</button>
+    <button id="btn-found" class="primary">Found it</button>
+  </div>
+</main>
+
+<!-- ============ HISTORY ============ -->
+<main id="screen-history" class="screen" aria-label="History">
+  <header class="topbar"><div class="title">History</div></header>
+  <p class="hint pad">Your last 20 parking spots.</p>
+  <ul id="history-list" class="list"></ul>
+</main>
+
+<!-- ============ SETTINGS ============ -->
+<main id="screen-settings" class="screen" aria-label="Settings">
+  <header class="topbar"><div class="title">Settings</div></header>
+  <div class="settings">
+    <div class="card">
+      <div class="label">Step length</div>
+      <label class="field">Your height (cm)
+        <input id="set-height" type="number" inputmode="numeric" min="120" max="220">
+      </label>
+      <div id="step-len-line" class="meta"></div>
+      <button id="btn-calibrate" class="secondary">Calibrate step length</button>
+    </div>
+
+    <div class="card">
+      <label class="field">Units
+        <select id="set-units"><option value="m">Metres</option><option value="ft">Feet</option></select>
+      </label>
+      <label class="field">Theme
+        <select id="set-theme"><option value="dark">Dark (best in parkades)</option><option value="light">Light</option><option value="auto">Match phone</option></select>
+      </label>
+      <label class="field">Stop tracking automatically after
+        <select id="set-autostop">
+          <option value="60">1 hour</option><option value="120">2 hours</option>
+          <option value="180">3 hours</option><option value="360">6 hours</option>
+          <option value="720">12 hours</option>
+        </select>
+      </label>
+      <label class="field">Timer reminder
+        <select id="set-remind">
+          <option value="5">5 min before</option><option value="10">10 min before</option>
+          <option value="15">15 min before</option><option value="30">30 min before</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="label">App</div>
+      <div class="meta">Version <span id="app-version"></span> · <span id="app-platform"></span></div>
+      <div id="update-status" class="meta"></div>
+      <div class="row2">
+        <button id="btn-update" class="secondary">Update</button>
+        <button id="btn-install" class="secondary">Install</button>
+      </div>
+      <button id="btn-apk" class="link">Get the Android APK</button>
+    </div>
+
+    <div class="card">
+      <div class="label">Permissions</div>
+      <p class="meta">Motion sensors count steps and direction. Location is used only when GPS is available, to correct the trail.</p>
+      <button id="btn-perms" class="secondary">Check permissions</button>
+    </div>
+  </div>
+</main>
+
+<!-- ============ TAB BAR ============ -->
+<nav class="tabbar" id="tabbar">
+  <button data-tab="home" class="active"><span>🅿</span>Car</button>
+  <button data-tab="history"><span>🕘</span>History</button>
+  <button data-tab="settings"><span>⚙</span>Settings</button>
+</nav>
+
+<!-- ============ SHEETS ============ -->
+<div id="sheet-park" class="sheet" role="dialog" aria-modal="true" aria-labelledby="park-title" hidden>
+  <div class="sheet-body">
+    <h2 id="park-title">Save this spot</h2>
+    <div id="gps-status" class="meta">Getting GPS…</div>
+    <div class="grid2">
+      <label class="field">Level / floor<input id="in-level" placeholder="e.g. P2" autocomplete="off"></label>
+      <label class="field">Bay / row<input id="in-bay" placeholder="e.g. C14" autocomplete="off"></label>
+    </div>
+    <label class="field">Note<input id="in-note" placeholder="Near the lifts, blue pillar…" autocomplete="off"></label>
+    <label class="photo-btn">
+      <input id="in-photo" type="file" accept="image/*" capture="environment" hidden>
+      <span id="photo-label">📷 Add a photo</span>
+    </label>
+    <img id="photo-preview" class="preview" alt="" hidden>
+    <button id="btn-park-save" class="primary">Save &amp; start tracking</button>
+    <button class="link sheet-close">Cancel</button>
+  </div>
+</div>
+
+<div id="sheet-timer" class="sheet" role="dialog" aria-modal="true" aria-labelledby="timer-title" hidden>
+  <div class="sheet-body">
+    <h2 id="timer-title">Parking timer</h2>
+    <div class="chips">
+      <button class="chip" data-min="30">30 min</button>
+      <button class="chip" data-min="60">1 h</button>
+      <button class="chip" data-min="120">2 h</button>
+      <button class="chip" data-min="180">3 h</button>
+      <button class="chip" data-min="240">4 h</button>
+    </div>
+    <label class="field">Or minutes<input id="in-timer-min" type="number" inputmode="numeric" min="1" max="1440"></label>
+    <button id="btn-timer-set" class="primary">Start timer</button>
+    <button class="link sheet-close">Cancel</button>
+  </div>
+</div>
+
+<div id="sheet-calib" class="sheet" role="dialog" aria-modal="true" aria-labelledby="calib-title" hidden>
+  <div class="sheet-body">
+    <h2 id="calib-title">Calibrate step length</h2>
+    <p class="meta">Pick a straight stretch you can measure (or pace out tiles/lines). Tap Start, walk normally holding the phone, then tap Stop and enter the distance.</p>
+    <div class="huge center" id="calib-steps">0</div>
+    <div class="meta center">steps counted</div>
+    <button id="btn-calib-go" class="primary">Start</button>
+    <label class="field" id="calib-dist-wrap" hidden>Distance walked (m)
+      <input id="in-calib-dist" type="number" inputmode="decimal" min="1" step="0.1">
+    </label>
+    <button id="btn-calib-save" class="primary" hidden>Save step length</button>
+    <button id="btn-calib-reset" class="link">Use height-based estimate</button>
+    <button class="link sheet-close">Close</button>
+  </div>
+</div>
+
+<div id="sheet-perms" class="sheet" role="dialog" aria-modal="true" aria-labelledby="perm-title" hidden>
+  <div class="sheet-body">
+    <h2 id="perm-title">Allow sensors</h2>
+    <p class="meta">To track you without GPS, Park Finder needs your phone's motion and compass sensors. Location is optional and only used to correct the trail.</p>
+    <button id="btn-perm-allow" class="primary">Allow motion &amp; location</button>
+    <div id="perm-result" class="meta"></div>
+    <button class="link sheet-close">Close</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="pdr.js"></script>
+<script src="map.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Read app version
+        id: ver
+        run: echo "version=$(node -p "require('./version.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Capacitor
+        run: npm install --no-audit --no-fund
+
+      - name: Copy web app into www
+        run: |
+          rm -rf www && mkdir www
+          cp index.html app.css app.js pdr.js map.js manifest.json version.json www/
+          cp -r icons www/
+
+      - name: Create Android project
+        run: npx cap add android
+
+      - name: Add native tracker, permissions and icons
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: ${{ steps.ver.outputs.version }}
+        run: |
+          pip install --quiet pillow
+          python3 native/patch_android.py
+
+      - name: Sync
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk ParkFinder.apk
+
+      - name: Upload APK (Actions artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ParkFinder-apk
+          path: ParkFinder.apk
+
+      - name: Move the "latest" tag to this build
+        run: |
+          git tag -f latest
+          git push -f origin latest
+
+      - name: Publish APK to the "latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Park Finder ${{ steps.ver.outputs.version }} (build ${{ github.run_number }})
+          body: |
+            Download **ParkFinder.apk** below and open it on your Android phone to install.
+            iPhone: open https://m9r1u5.github.io/Park/ in Safari → Share → Add to Home Screen.
+          files: ParkFinder.apk
+          make_latest: true
+          overwrite_files: true

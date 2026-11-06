@@ -1,0 +1,8 @@
+{
+  "appId": "com.m9r1u5.parkfinder",
+  "appName": "Park Finder",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0f1216"
+  }
+}
