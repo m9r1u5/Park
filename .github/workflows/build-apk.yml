@@ -23,8 +23,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
-
       - name: Read app version
         id: ver
         run: echo "version=$(node -p "require('./version.json').version")" >> "$GITHUB_OUTPUT"
