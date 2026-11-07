@@ -1,6 +1,6 @@
 {
   "name": "park-finder",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "Find your parked car with GPS + step counting (dead reckoning).",
   "dependencies": {

@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.2';
+  const APP_VERSION = '1.0.3';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
@@ -148,20 +148,41 @@
     return 'steps';
   }
 
-  function addPoint(x, y, f) {
+  function addPoint(x, y, f, g) {
     const pts = session.points;
-    pts.push({ x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, f });
+    const p = { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, f };
+    if (g) p.g = 1;                         // GPS jump, drawn dashed on the map
+    pts.push(p);
     if (pts.length > MAX_POINTS) {          // thin older half to keep storage small
       const keep = [pts[0]];
       for (let i = 1; i < pts.length / 2; i += 2) keep.push(pts[i]);
       session.points = keep.concat(pts.slice(Math.floor(pts.length / 2)));
+      session.corrIdx = Math.min(session.corrIdx || 0, session.points.length - 1);
     }
   }
 
-  /** Shift the current position (GPS correction). Trail history stays as walked. */
+  /**
+   * GPS correction. Instead of teleporting (which drew long straight lines),
+   * bend the trail walked since the last correction: the first point stays put,
+   * the latest point moves the full amount, the ones between move in proportion.
+   * Only if no steps happened since the last correction is a jump drawn (dashed).
+   */
   function applyCorrection(dx, dy) {
-    session.x += dx; session.y += dy;
-    addPoint(session.x, session.y, floorNow());
+    const pts = session.points;
+    const start = Math.min(session.corrIdx || 0, pts.length - 1);
+    const n = pts.length - 1;
+    if (n > start) {
+      for (let k = start + 1; k <= n; k++) {
+        const fr = (k - start) / (n - start);
+        pts[k].x = Math.round((pts[k].x + dx * fr) * 100) / 100;
+        pts[k].y = Math.round((pts[k].y + dy * fr) * 100) / 100;
+      }
+      session.x += dx; session.y += dy;
+    } else {
+      session.x += dx; session.y += dy;
+      addPoint(session.x, session.y, floorNow(), true);
+    }
+    session.corrIdx = session.points.length - 1;
     tracker && tracker.correct(dx, dy);
   }
 
@@ -289,13 +310,21 @@
       this.running = false; clearInterval(this.poll); this.poll = null;
       try { await Native.stop(); } catch (e) { }
     },
-    correct(dx, dy) { Native.correct({ dx, dy }).catch(() => { }); },
+    // While a correction is on its way to the service, ignore position reports
+    // that were made before it — otherwise the same correction got applied twice.
+    corrPending: 0, corrGen: 0,
+    correct(dx, dy) {
+      this.corrPending++;
+      Native.correct({ dx, dy }).catch(() => { }).finally(() => { this.corrPending--; this.corrGen++; });
+    },
     _startPoll() { clearInterval(this.poll); this.poll = setInterval(() => this.sync(), 500); this.sync(); },
     async sync() {
       if (!session) return;
+      if (this.corrPending > 0) return;
+      const gen = this.corrGen;
       let s;
       try { s = await Native.getState({ since: session.nativeIdx || 0 }); } catch (e) { return; }
-      if (!s) return;
+      if (!s || gen !== this.corrGen || this.corrPending > 0) return;   // stale: retry next poll
       if (s.total < (session.nativeIdx || 0)) session.nativeIdx = 0;   // service restarted
       const arr = s.points || [];
       for (let i = 0; i + 2 < arr.length; i += 3) addPoint(arr[i], arr[i + 1], arr[i + 2] + (session.floorManual || 0));
@@ -358,6 +387,21 @@
         if (this.lastFusedT && Math.abs(fix.t - this.lastFusedT) < 800) return;
         this.lastFusedT = fix.t;
         const g = PDR.geoToLocal(session.carGeo.lat, session.carGeo.lon, fix.lat, fix.lon);
+        // Near buildings GPS can claim you're 50–100 m away while saying it's
+        // accurate. A big jump is only believed after 3 readings agree on it.
+        const ox = g.x - session.x, oy = g.y - session.y;
+        const gap = Math.hypot(ox, oy);
+        const allowed = Math.max(25, 3 * Math.hypot(Math.max(PDR.MIN_SIGMA, sigmaP), fix.acc));
+        if (gap > allowed) {
+          const pd = this.pending;
+          if (pd && fix.t - pd.t < 15000 && Math.hypot(ox - pd.ox, oy - pd.oy) < Math.max(10, fix.acc)) {
+            pd.n++; pd.t = fix.t; pd.ox = ox; pd.oy = oy;
+          } else {
+            this.pending = { n: 1, t: fix.t, ox, oy };
+          }
+          if (this.pending.n < 3) { saveSession(); return; }   // not trusted (yet)
+        }
+        this.pending = null;
         const f = PDR.robustFuse(session.x, session.y, sigmaP, g.x, g.y, fix.acc);
         const dx = f.x - session.x, dy = f.y - session.y;
         if (Math.hypot(dx, dy) > 0.3) applyCorrection(dx, dy);

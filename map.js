@@ -121,11 +121,26 @@
       // walked trail
       if (d.points.length > 1) {
         g.lineJoin = 'round'; g.lineCap = 'round';
+        // walked trail (solid)
         g.strokeStyle = blue; g.lineWidth = 4;
         g.beginPath();
         g.moveTo(this._tx(d.points[0].x), this._ty(d.points[0].y));
-        for (let i = 1; i < d.points.length; i++) g.lineTo(this._tx(d.points[i].x), this._ty(d.points[i].y));
+        for (let i = 1; i < d.points.length; i++) {
+          const p = d.points[i];
+          if (p.g) g.moveTo(this._tx(p.x), this._ty(p.y));
+          else g.lineTo(this._tx(p.x), this._ty(p.y));
+        }
         g.stroke();
+        // GPS jumps (thin dashed) — not walked, just "GPS moved you here"
+        g.setLineDash([4, 6]); g.lineWidth = 2; g.strokeStyle = muted;
+        g.beginPath();
+        for (let i = 1; i < d.points.length; i++) {
+          const p = d.points[i];
+          if (!p.g) continue;
+          g.moveTo(this._tx(d.points[i - 1].x), this._ty(d.points[i - 1].y));
+          g.lineTo(this._tx(p.x), this._ty(p.y));
+        }
+        g.stroke(); g.setLineDash([]);
       }
 
       // retrace waypoints
