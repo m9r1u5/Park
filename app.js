@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.3';
+  const APP_VERSION = '1.0.4';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail

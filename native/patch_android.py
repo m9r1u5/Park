@@ -65,6 +65,27 @@ g = re.sub(r'versionName\s+"[^"]*"', f'versionName "{name}"', g)
 open(gradle, 'w', encoding='utf-8').write(g)
 print('version', name, code)
 
+# 3b. Always sign with the SAME key (native/parkfinder.keystore).
+# GitHub makes a new random debug key on every run, and Android refuses to
+# install an update signed with a different key ("App not installed").
+ks = os.path.join(ROOT, 'native', 'parkfinder.keystore').replace('\\', '/')
+g = open(gradle, encoding='utf-8').read()
+if 'parkfinder.keystore' not in g:
+    sign = (
+        "android {\n"
+        "    signingConfigs {\n"
+        "        debug {\n"
+        f"            storeFile file('{ks}')\n"
+        "            storePassword 'parkfinder'\n"
+        "            keyAlias 'parkfinder'\n"
+        "            keyPassword 'parkfinder'\n"
+        "        }\n"
+        "    }\n"
+    )
+    g = g.replace('android {\n', sign, 1)
+    open(gradle, 'w', encoding='utf-8').write(g)
+    print('fixed signing key set')
+
 # 4. Notification icon (white "P" in a rounded square, vector)
 os.makedirs(os.path.join(RES, 'drawable'), exist_ok=True)
 open(os.path.join(RES, 'drawable', 'ic_stat_park.xml'), 'w').write('''<vector xmlns:android="http://schemas.android.com/apk/res/android"
