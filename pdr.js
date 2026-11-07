@@ -292,12 +292,64 @@
     };
   }
 
+  /**
+   * GPS + steps fusion that can't "lock up".
+   * Old bug: each fix shrank the confidence radius, so after a minute it was
+   * ~0 m and GPS was ignored completely while the step trail drifted.
+   * Now:
+   *  - the radius never drops below MIN_SIGMA (or half the GPS accuracy),
+   *  - if steps and GPS disagree by much more than both errors allow,
+   *    the steps are wrong (drift, magnets) → jump most of the way to GPS.
+   */
+  const MIN_SIGMA = 3;
+  function robustFuse(x, y, sigmaP, gx, gy, gpsAcc) {
+    const sp = Math.max(MIN_SIGMA, sigmaP);
+    const sg = Math.max(2, gpsAcc);
+    const f = fuseFix(x, y, sp, gx, gy, sg);
+    const gap = Math.hypot(gx - x, gy - y);
+    if (gap > 3 * Math.hypot(sp, sg)) {
+      f.x = x + 0.8 * (gx - x); f.y = y + 0.8 * (gy - y); f.weight = 0.8;
+    }
+    f.sigma = Math.max(MIN_SIGMA, sg * 0.5, f.sigma);
+    return f;
+  }
+
+  /**
+   * Retrace: which waypoint to head for next.
+   * wps[0] is the car, wps[last] is where you started retracing.
+   *  1. Move on when you reach the target, or once you're already closer to
+   *     the next waypoint than the target is (you've walked past it).
+   *  2. SHORTCUT: for every earlier point on the trail (including the car),
+   *     compare  STRAIGHT_PENALTY × straight-line distance to it  +  trail
+   *     from there to the car. A straight line might cross a wall, so it is
+   *     counted 5× — but if you walked a big loop and the car is close, going
+   *     straight still wins and you aren't sent round the loop again.
+   */
+  const STRAIGHT_PENALTY = 5;
+  function retraceTarget(wps, tgt, x, y, snap) {
+    const d = i => Math.hypot(wps[i].x - x, wps[i].y - y);
+    while (tgt > 0) {
+      const seg = Math.hypot(wps[tgt].x - wps[tgt - 1].x, wps[tgt].y - wps[tgt - 1].y);
+      if (d(tgt) < snap || d(tgt - 1) < seg) tgt--; else break;
+    }
+    // trail length from each waypoint back to the car
+    const cum = [0];
+    for (let i = 1; i <= tgt; i++) cum[i] = cum[i - 1] + Math.hypot(wps[i].x - wps[i - 1].x, wps[i].y - wps[i - 1].y);
+    // the leg to the current target is along the trail you walked → no penalty
+    let best = tgt, bestCost = d(tgt) + cum[tgt];
+    for (let i = 0; i < tgt; i++) {
+      const c = STRAIGHT_PENALTY * d(i) + cum[i];
+      if (c < bestCost) { bestCost = c; best = i; }
+    }
+    return best;
+  }
+
   /** Default step length from body height (cm) — common 0.415 × height rule. */
   function stepFromHeight(cm) { return Math.max(0.35, Math.min(1.1, (cm / 100) * 0.415)); }
 
   root.PDR = {
     StepDetector, HeadingFilter, wrap180, wrap360,
     geoToLocal, localToGeo, bearing, simplify,
-    pdrSigma, fuseFix, stepFromHeight, DRIFT_PER_M
+    pdrSigma, fuseFix, robustFuse, retraceTarget, stepFromHeight, DRIFT_PER_M, MIN_SIGMA
   };
 })(typeof window !== 'undefined' ? window : globalThis);

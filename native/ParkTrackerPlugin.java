@@ -88,6 +88,12 @@ public class ParkTrackerPlugin extends Plugin {
             r.put("hasBaro", s.hasBaro);
             r.put("stepSource", s.stepSource);
             r.put("total", s.count());
+            r.put("outdoor", s.outdoor);
+            if (s.fixTime > 0) {
+                JSObject fx = new JSObject();
+                fx.put("lat", s.fixLat); fx.put("lon", s.fixLon); fx.put("acc", s.fixAcc); fx.put("t", s.fixTime);
+                r.put("fix", fx);
+            }
             pts = peek ? new float[0] : s.pointsSince(since);
         }
         JSArray arr = new JSArray();

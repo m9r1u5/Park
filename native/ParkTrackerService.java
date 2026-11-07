@@ -18,7 +18,11 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.Bundle;
 import android.os.PowerManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
@@ -78,6 +82,45 @@ public class ParkTrackerService extends Service implements SensorEventListener {
     private double p0 = Double.NaN, pSmooth = Double.NaN;
     private long binStart = 0; private double binSum = 0; private int binN = 0; private double lastBin = Double.NaN;
 
+    /* ---------- GPS (in the service so it keeps going with the screen off) ---------- */
+    // TUNING: a fix this good means you're outdoors → slopes/hills are NOT parkade levels
+    private static final float OUTDOOR_ACC_M = 20f;
+    private static final long OUTDOOR_HOLD_MS = 15000;
+    private LocationManager lm;
+    private volatile long lastGoodFixMs = 0;
+    private double altOffset = 0;     // terrain height absorbed while outdoors
+    private final LocationListener locListener = new LocationListener() {
+        @Override public void onLocationChanged(Location l) {
+            long now = System.currentTimeMillis();
+            if (l.hasAccuracy() && l.getAccuracy() <= OUTDOOR_ACC_M) lastGoodFixMs = now;
+            synchronized (st) {
+                st.fixLat = l.getLatitude(); st.fixLon = l.getLongitude();
+                st.fixAcc = l.hasAccuracy() ? l.getAccuracy() : 999; st.fixTime = now;
+            }
+        }
+        @Override public void onStatusChanged(String p, int s, Bundle b) { }
+        @Override public void onProviderEnabled(String p) { }
+        @Override public void onProviderDisabled(String p) { }
+    };
+
+    private boolean hasLocationPerm() {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void startGps() {
+        if (!hasLocationPerm()) return;
+        try {
+            lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            lm.removeUpdates(locListener);
+            if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0, locListener, Looper.getMainLooper());
+        } catch (Exception ignored) { }
+    }
+
+    private void stopGps() {
+        try { if (lm != null) lm.removeUpdates(locListener); } catch (Exception ignored) { }
+    }
+
     private final Runnable autoStop = () -> stopTracking();
 
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -101,6 +144,8 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         accLastT = -1; lp = prev = prev2 = 0; avgPeak = 1.6; valleySeen = true;
 
         registerSensors();
+        lastGoodFixMs = 0; altOffset = 0;
+        startGps();
 
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
@@ -146,6 +191,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
 
     private void stopTracking() {
         handler.removeCallbacks(autoStop);
+        stopGps();
         if (sm != null) sm.unregisterListener(this);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         st.running = false;
@@ -155,6 +201,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
 
     @Override public void onDestroy() {
         handler.removeCallbacks(autoStop);
+        stopGps();
         if (sm != null) sm.unregisterListener(this);
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         st.running = false;
@@ -273,7 +320,16 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         }
 
         double alt = 44330.0 * (1 - Math.pow(pSmooth / p0, 1 / 5.255));
+        boolean outdoor = t - lastGoodFixMs < OUTDOOR_HOLD_MS;
         synchronized (st) {
+            st.outdoor = outdoor;
+            if (outdoor) {
+                // Good GPS = outside. Walking up/down a slope isn't a parkade level,
+                // so absorb the height change and keep the level count as it is.
+                altOffset = alt - st.floor * FLOOR_M;
+                return;
+            }
+            alt -= altOffset;
             int f = st.floor;
             if (alt > (f + 0.5) * FLOOR_M + HYST_M) f++;
             else if (alt < (f - 0.5) * FLOOR_M - HYST_M) f--;
@@ -324,7 +380,11 @@ public class ParkTrackerService extends Service implements SensorEventListener {
 
     private void startForegroundCompat(Notification n) {
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH);
+            int type = ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH;
+            if (hasLocationPerm()) type |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+            startForeground(NOTIF_ID, n, type);
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIF_ID, n, hasLocationPerm() ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0);
         } else {
             startForeground(NOTIF_ID, n);
         }

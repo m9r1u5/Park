@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.0.1';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
@@ -306,6 +306,12 @@
       session.floorAuto = s.floor || 0;
       session.hasBaro = !!s.hasBaro;
       session.stepSource = s.stepSource;
+      session.outdoor = !!s.outdoor;
+      // GPS read by the background service (keeps working with the screen off)
+      if (s.fix && s.fix.t > (this.lastFixT || 0)) {
+        this.lastFixT = s.fix.t;
+        Gps._fix({ coords: { latitude: s.fix.lat, longitude: s.fix.lon, accuracy: s.fix.acc }, timestamp: s.fix.t });
+      }
       if (!s.running && session.tracking) { session.tracking = false; toast('Tracking stopped automatically.'); render(); }
       saveSession();
     }
@@ -348,8 +354,11 @@
         session.carGeo = { lat: g.lat, lon: g.lon, acc: Math.hypot(fix.acc, sigmaP), src: session.steps < 8 ? 'gps' : 'derived' };
         session.sigmaBase = Math.min(sigmaP, fix.acc); session.distAtFix = session.dist;
       } else {
+        // Same reading delivered twice (phone GPS + background service)? Use it once.
+        if (this.lastFusedT && Math.abs(fix.t - this.lastFusedT) < 800) return;
+        this.lastFusedT = fix.t;
         const g = PDR.geoToLocal(session.carGeo.lat, session.carGeo.lon, fix.lat, fix.lon);
-        const f = PDR.fuseFix(session.x, session.y, sigmaP, g.x, g.y, fix.acc);
+        const f = PDR.robustFuse(session.x, session.y, sigmaP, g.x, g.y, fix.acc);
         const dx = f.x - session.x, dy = f.y - session.y;
         if (Math.hypot(dx, dy) > 0.3) applyCorrection(dx, dy);
         session.sigmaBase = f.sigma; session.distAtFix = session.dist;
@@ -660,11 +669,13 @@
     retrace.on = !retrace.on;
     $('btn-retrace').classList.toggle('on', retrace.on);
     if (retrace.on) {
-      retrace.wps = PDR.simplify(session.points.map(p => ({ x: p.x, y: p.y })), 3);
-      let best = 0, bd = Infinity;
-      retrace.wps.forEach((p, i) => { const d = Math.hypot(p.x - session.x, p.y - session.y); if (d < bd) { bd = d; best = i; } });
-      retrace.target = bd < 6 && best > 0 ? best - 1 : best;
-      toast('Retrace: follow the arrow back along the way you came.');
+      // trail + where you are now, simplified (5 m) so small wiggles don't become waypoints
+      const pts = session.points.map(p => ({ x: p.x, y: p.y }));
+      pts.push({ x: session.x, y: session.y });
+      retrace.wps = PDR.simplify(pts, 5);
+      retrace.wps[0] = { x: 0, y: 0 };            // always end exactly at the car
+      retrace.target = retrace.wps.length - 1;    // updateFind picks the real target (with shortcuts)
+      toast('Retrace: follow the arrow back the way you came. Loops you don\'t need are skipped.');
     }
     render();
   });
@@ -675,16 +686,17 @@
     const x = session.x, y = session.y;
     const directDist = Math.hypot(x, y);
     let tx = 0, ty = 0, remain = directDist, wpNote = '';
+    const sigma = sigmaNow();
     if (retrace.on && retrace.wps.length > 1) {
-      let tgt = retrace.target;
-      while (tgt > 0 && Math.hypot(retrace.wps[tgt].x - x, retrace.wps[tgt].y - y) < 4) tgt--;
+      // "near" grows with the position uncertainty, between 8 and 25 m
+      const snap = Math.max(8, Math.min(25, sigma));
+      const tgt = PDR.retraceTarget(retrace.wps, retrace.target, x, y, snap);
       retrace.target = tgt;
       tx = retrace.wps[tgt].x; ty = retrace.wps[tgt].y;
       remain = Math.hypot(tx - x, ty - y);
       for (let i = tgt; i > 0; i--) remain += Math.hypot(retrace.wps[i].x - retrace.wps[i - 1].x, retrace.wps[i].y - retrace.wps[i - 1].y);
-      wpNote = tgt > 0 ? `Waypoint ${tgt} of ${retrace.wps.length - 1} · then on to car` : 'Last stretch to the car';
+      wpNote = tgt > 0 ? `${tgt} turn${tgt > 1 ? 's' : ''} to go · next in ${fmtDist(Math.hypot(tx - x, ty - y))}` : 'Last stretch to the car';
     }
-    const sigma = sigmaNow();
     const brg = PDR.bearing(x, y, tx, ty);
     const h = session.heading;
     const arrowEl = $('arrow');

@@ -27,6 +27,7 @@ perms = [
     'android.permission.ACTIVITY_RECOGNITION',
     'android.permission.FOREGROUND_SERVICE',
     'android.permission.FOREGROUND_SERVICE_HEALTH',
+    'android.permission.FOREGROUND_SERVICE_LOCATION',
     'android.permission.HIGH_SAMPLING_RATE_SENSORS',
     'android.permission.POST_NOTIFICATIONS',
     'android.permission.WAKE_LOCK',
@@ -35,6 +36,7 @@ perms = [
 ]
 add = ''.join(f'    <uses-permission android:name="{p}" />\n' for p in perms if p not in m)
 add += '    <uses-feature android:name="android.hardware.camera" android:required="false" />\n'
+add += '    <uses-feature android:name="android.hardware.location.gps" android:required="false" />\n'
 add += '    <uses-feature android:name="android.hardware.sensor.barometer" android:required="false" />\n'
 add += '    <uses-feature android:name="android.hardware.sensor.stepdetector" android:required="false" />\n'
 m = m.replace('</manifest>', add + '</manifest>')
@@ -43,7 +45,7 @@ components = '''
         <service
             android:name=".ParkTrackerService"
             android:exported="false"
-            android:foregroundServiceType="health" />
+            android:foregroundServiceType="health|location" />
         <receiver
             android:name=".ReminderReceiver"
             android:exported="false" />

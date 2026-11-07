@@ -17,6 +17,9 @@ public final class TrackerState {
     public boolean hasBaro = false;
     public String stepSource = "none";
     public double stepLength = 0.7;
+    public boolean outdoor = false;                  // good GPS right now
+    public double fixLat = 0, fixLon = 0, fixAcc = 999;
+    public long fixTime = 0;                         // ms, 0 = no fix yet
 
     // trail: x, y, floor triplets
     private float[] pts = new float[3 * 4096];
@@ -26,7 +29,7 @@ public final class TrackerState {
 
     public synchronized void reset(double x0, double y0, int steps0, double dist0, double heading0, double stepLen) {
         x = x0; y = y0; steps = steps0; dist = dist0; heading = heading0; stepLength = stepLen;
-        floor = 0; count = 0;
+        floor = 0; count = 0; outdoor = false; fixTime = 0;
     }
 
     public synchronized void addPoint() {
