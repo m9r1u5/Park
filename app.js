@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.1';
+  const APP_VERSION = '1.0.2';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
@@ -926,8 +926,7 @@
     if (!navigator.onLine) { st.textContent = 'You\'re offline. Connect to check for updates.'; return; }
     st.textContent = 'Checking…';
     try {
-      const r = await fetch(PAGES_URL + 'version.json?t=' + now(), { cache: 'no-store' });
-      const v = await r.json();
+      const v = { version: await latestVersion() };
       if (!newer(v.version, APP_VERSION)) {
         st.textContent = `You're up to date (${APP_VERSION}).`;
         if (!isNative) navigator.serviceWorker?.getRegistration().then(reg => reg && reg.update());
@@ -946,8 +945,45 @@
         }
         setTimeout(() => location.reload(), 1200);
       }
-    } catch (e) { st.textContent = 'Couldn\'t reach the update server. Try again later.'; }
+    } catch (e) { st.textContent = 'Couldn\'t check for updates (' + (e.message || 'no connection') + '). Try again later.'; }
   });
+
+  /**
+   * Newest published version. Tries, in order (first that answers wins):
+   *  1. version.json straight from the GitHub repo (works without GitHub Pages)
+   *  2. the latest GitHub release name, e.g. "Park Finder 1.0.1 (build 3)"
+   *  3. version.json on GitHub Pages
+   */
+  async function latestVersion() {
+    const t = '?t=' + now();
+    const sources = [
+      async () => (await getJson('https://raw.githubusercontent.com/m9r1u5/Park/main/version.json' + t)).version,
+      async () => {
+        const rel = await getJson('https://api.github.com/repos/m9r1u5/Park/releases/latest');
+        const m = /(\d+\.\d+\.\d+)/.exec(rel.name || rel.tag_name || '');
+        if (!m) throw new Error('no version in release');
+        return m[1];
+      },
+      async () => (await getJson(PAGES_URL + 'version.json' + t)).version
+    ];
+    let lastErr;
+    for (const src of sources) {
+      try {
+        const v = await src();
+        if (/^\d+\.\d+\.\d+$/.test(v)) return v;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('no update source answered');
+  }
+  async function getJson(url) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    try {
+      const r = await fetch(url, { cache: 'no-store', signal: ctl.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return await r.json();
+    } finally { clearTimeout(timer); }
+  }
 
   if ('serviceWorker' in navigator && !isNative && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => { });
