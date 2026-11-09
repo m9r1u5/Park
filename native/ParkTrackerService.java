@@ -56,12 +56,14 @@ public class ParkTrackerService extends Service implements SensorEventListener {
 
     /* ---------- heading fusion ---------- */
     // TUNING: how fast the gyro heading is pulled toward the compass (per sensor event, ~50 Hz)
-    private static final double OFFSET_GAIN = 0.02;
+    private static final double OFFSET_GAIN = 0.004;          // ~5 s to follow the compass
     private static final double OFFSET_GAIN_DISTURBED = 0.0008;
     private static final double DISTURB_DEG = 30;        // compass vs gyro disagreement treated as interference
     private static final double MAG_MIN_UT = 25, MAG_MAX_UT = 65;  // normal Earth field strength
     private double absHeading = -1, gameHeading = -1, offset = Double.NaN;
     private double magStrength = 45;
+    private double magBase = -1;                              // usual field strength here
+    private static final double MAG_JUMP_UT = 6;              // this much off usual = steel/cars nearby
     private boolean hasGame = false;
     private final float[] rot = new float[9];
 
@@ -142,7 +144,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         absHeading = gameHeading = -1; offset = Double.NaN;
         p0 = pSmooth = lastBin = Double.NaN; binN = 0; binSum = 0;
         accLastT = -1; lp = prev = prev2 = 0; avgPeak = 1.6; valleySeen = true;
-        resetCleaner();
+        resetCleaner(); seg = -1; inPocket = false; anchorPending = false; headingCorr = 0; magBase = -1;
 
         registerSensors();
         lastGoodFixMs = 0; altOffset = 0;
@@ -184,6 +186,9 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         hasGame = game != null;
         if (hasGame) sm.registerListener(this, game, SensorManager.SENSOR_DELAY_GAME);
         if (mag != null) sm.registerListener(this, mag, SensorManager.SENSOR_DELAY_UI);
+
+        Sensor prox = sm.getDefaultSensor(Sensor.TYPE_PROXIMITY);
+        if (prox != null) { proxMax = prox.getMaximumRange(); sm.registerListener(this, prox, SensorManager.SENSOR_DELAY_NORMAL); }
 
         Sensor baro = sm.getDefaultSensor(Sensor.TYPE_PRESSURE);
         st.hasBaro = baro != null;
@@ -231,6 +236,13 @@ public class ParkTrackerService extends Service implements SensorEventListener {
             case Sensor.TYPE_MAGNETIC_FIELD:
                 magStrength = Math.sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2]);
                 break;
+            case Sensor.TYPE_PROXIMITY: {
+                boolean near = e.values[0] < Math.min(3f, proxMax * 0.5f);
+                long now = android.os.SystemClock.elapsedRealtime();
+                if (near && !inPocket) { inPocket = true; anchorPending = true; anchorAt = now + 1000; }
+                else if (!near && inPocket) { inPocket = false; anchorPending = false; headingCorr = 0; }
+                break;
+            }
             case Sensor.TYPE_PRESSURE:
                 onPressure(e.values[0]);
                 break;
@@ -262,7 +274,9 @@ public class ParkTrackerService extends Service implements SensorEventListener {
             if (Double.isNaN(offset)) offset = target;
             else {
                 double diff = wrap180(target - offset);
-                boolean magOdd = magStrength < MAG_MIN_UT || magStrength > MAG_MAX_UT;
+                boolean magOdd = magStrength < MAG_MIN_UT || magStrength > MAG_MAX_UT
+                        || (magBase > 0 && Math.abs(magStrength - magBase) > MAG_JUMP_UT);
+                if (!magOdd) magBase = magBase < 0 ? magStrength : magBase + 0.002 * (magStrength - magBase);
                 boolean disturbed = magOdd || Math.abs(diff) > DISTURB_DEG;
                 offset = wrap180(offset + (disturbed ? OFFSET_GAIN_DISTURBED : OFFSET_GAIN) * diff);
             }
@@ -279,6 +293,16 @@ public class ParkTrackerService extends Service implements SensorEventListener {
     private static final int MIN_BOUT = 4, WINDOW = 5;
     private static final long MAX_GAP_MS = 1300;
     private static final double RHYTHM = 0.35;
+    private static final double TURN_DEG = 25;     // smaller direction changes = wobble, keep the line straight
+    private double seg = -1;                        // direction of the current straight line
+
+    /* ---------- pocket: phone's pointing direction ≠ walking direction ---------- */
+    // When the proximity sensor says "covered" (pocket/bag) we keep walking in the
+    // direction we had just before, and only follow how the heading CHANGES from there.
+    private float proxMax = 5f;
+    private boolean inPocket = false, anchorPending = false;
+    private long anchorAt = 0;
+    private double headingCorr = 0;
     private long cLastT = -1_000_000_000L;
     private double cadence = -1;
     private boolean inBout = false;
@@ -286,6 +310,12 @@ public class ParkTrackerService extends Service implements SensorEventListener {
     private final java.util.ArrayDeque<Double> recent = new java.util.ArrayDeque<>();
 
     private void resetCleaner() { pending.clear(); recent.clear(); inBout = false; cadence = -1; }
+
+    private double segmentLock(double m) {
+        if (m < 0) return seg;
+        if (seg < 0 || Math.abs(wrap180(m - seg)) > TURN_DEG) seg = m;
+        return seg;
+    }
 
     private static double circMedian(java.util.Collection<Double> hs) {
         double best = -1, bestSum = Double.MAX_VALUE;
@@ -301,6 +331,13 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         long t = android.os.SystemClock.elapsedRealtime();
         double h;
         synchronized (st) { h = st.heading; }
+        if (inPocket && h >= 0) {
+            if (anchorPending) {
+                if (t >= anchorAt && seg >= 0) { headingCorr = wrap180(seg - h); anchorPending = false; }
+                else h = seg;                       // phone still settling in the pocket: hold direction
+            }
+            if (!anchorPending && h >= 0) h = (h + headingCorr + 360) % 360;
+        }
         long gap = t - cLastT;
         cLastT = t;
         if (gap > MAX_GAP_MS) { resetCleaner(); }
@@ -312,7 +349,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         if (gap <= MAX_GAP_MS && cadence < 0 && !pending.isEmpty()) cadence = gap;
 
         if (h >= 0) { recent.addLast(h); if (recent.size() > WINDOW) recent.removeFirst(); }
-        double smooth = recent.isEmpty() ? -1 : circMedian(recent);
+        double smooth = recent.isEmpty() ? -1 : segmentLock(circMedian(recent));
         if (inBout) {
             st.step(h < 0 ? -1 : smooth);
         } else {

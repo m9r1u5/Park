@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.5';
+  const APP_VERSION = '1.0.6';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
@@ -466,6 +466,7 @@
     document.body.classList.toggle('finding', name === 'find');
     if (name === 'history') renderHistory();
     if (name === 'settings') renderSettings();
+    if (name === 'find') LiveCompass.start(); else LiveCompass.stop();
     if (name === 'find') { retrace.on = false; $('btn-retrace').classList.remove('on'); setTimeout(() => map.refit(), 30); }
     updateWakeLock();
     render();
@@ -597,7 +598,7 @@
   });
 
   $('btn-find').addEventListener('click', async () => {
-    if (session && session.tracking && tracker === JsTracker && !JsTracker.running) await requestMotion();
+    if (!isNative) await requestMotion();   // iPhone needs a tap to allow the compass
     show('find');
   });
   $('btn-find-back').addEventListener('click', () => show('home'));
@@ -727,7 +728,53 @@
     render();
   });
 
-  let arrowAngle = 0, arrived = false;
+  /* ---------------------------------------------------------------
+     LIVE COMPASS for the Find screen. The arrow must follow the phone
+     instantly as you turn it — it used to use the tracker's heading,
+     which arrives only twice a second (Android) and stops when tracking
+     stops. "Up on the screen" = the way the top of the phone points
+     (held flat) or the way the back points (held upright facing you).
+     --------------------------------------------------------------- */
+  const LiveCompass = {
+    h: null, t: 0, on: false,
+    start() {
+      if (this.on) return; this.on = true;
+      if ('ondeviceorientationabsolute' in window) window.addEventListener('deviceorientationabsolute', this.onEv);
+      window.addEventListener('deviceorientation', this.onEv);
+    },
+    stop() {
+      this.on = false;
+      window.removeEventListener('deviceorientationabsolute', this.onEv);
+      window.removeEventListener('deviceorientation', this.onEv);
+    },
+    fresh() { return this.h != null && performance.now() - this.t < 1500; },
+    onEv(e) {
+      let raw = null;
+      if (typeof e.webkitCompassHeading === 'number' && !isNaN(e.webkitCompassHeading)) raw = e.webkitCompassHeading;   // iPhone
+      else if ((e.absolute || e.type === 'deviceorientationabsolute') && e.alpha != null) raw = forwardHeading(e.alpha, e.beta || 0, e.gamma || 0);
+      if (raw == null) return;
+      const so = (screen.orientation && screen.orientation.angle) || 0;   // landscape support
+      raw = PDR.wrap360(raw + so);
+      // light smoothing (keeps it steady without feeling laggy)
+      LiveCompass.h = LiveCompass.h == null ? raw : PDR.wrap360(LiveCompass.h + 0.35 * PDR.wrap180(raw - LiveCompass.h));
+      LiveCompass.t = performance.now();
+      if (currentScreen === 'find') drawArrow();
+    }
+  };
+  LiveCompass.onEv = LiveCompass.onEv.bind(LiveCompass);
+
+  let arrowAngle = 0, arrived = false, lastBrg = null, arrowMode = 'north';
+  function drawArrow() {
+    const arrowEl = $('arrow');
+    if (lastBrg == null || arrowMode === 'here') return;
+    const h = LiveCompass.fresh() ? LiveCompass.h : (session && session.heading);
+    let target;
+    if (h != null) { arrowEl.className = 'arrow'; target = lastBrg - h; $('arrow-note').textContent = ''; }
+    else { arrowEl.className = 'arrow north'; target = lastBrg; $('arrow-note').textContent = 'No compass · north-up'; }
+    arrowAngle += PDR.wrap180(target - arrowAngle);       // shortest turn, no 359→0 spin
+    arrowEl.style.transform = `rotate(${arrowAngle}deg)`;
+  }
+
   function updateFind() {
     if (!session) { show('home'); return; }
     const x = session.x, y = session.y;
@@ -745,18 +792,15 @@
       wpNote = tgt > 0 ? `${tgt} turn${tgt > 1 ? 's' : ''} to go · next in ${fmtDist(Math.hypot(tx - x, ty - y))}` : 'Last stretch to the car';
     }
     const brg = PDR.bearing(x, y, tx, ty);
-    const h = session.heading;
-    const arrowEl = $('arrow');
-    let target;
+    lastBrg = brg;
+    const h = LiveCompass.fresh() ? LiveCompass.h : session.heading;
     if (directDist < ARRIVE_M) {
-      arrowEl.className = 'arrow here'; target = arrowAngle; $('arrow-note').textContent = 'You\'re here';
-    } else if (h != null) {
-      arrowEl.className = 'arrow'; target = brg - h; $('arrow-note').textContent = '';
+      arrowMode = 'here';
+      $('arrow').className = 'arrow here'; $('arrow-note').textContent = 'You\'re here';
     } else {
-      arrowEl.className = 'arrow north'; target = brg; $('arrow-note').textContent = 'No compass · north-up';
+      arrowMode = 'point';
+      drawArrow();
     }
-    arrowAngle += PDR.wrap180(target - arrowAngle);       // shortest turn, no 359→0 spin
-    arrowEl.style.transform = `rotate(${arrowAngle}deg)`;
 
     $('find-dist').textContent = directDist < ARRIVE_M ? 'Here!' : fmtDist(remain);
     let sub;

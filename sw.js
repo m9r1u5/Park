@@ -1,6 +1,6 @@
 /* Park Finder service worker — offline app shell.
    Bump CACHE when you release a new version so phones pick up new files. */
-const CACHE = 'parkfinder-1.0.5';
+const CACHE = 'parkfinder-1.0.6';
 const FILES = [
   './', 'index.html', 'app.css', 'app.js', 'pdr.js', 'map.js', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'

@@ -128,7 +128,7 @@ body.finding .tabbar { display: none; }
 .find-top { display: grid; grid-template-columns: 46% 1fr; gap: 12px; align-items: center; margin-top: 4px; }
 .arrow-wrap { position: relative; aspect-ratio: 1; display: grid; place-items: center;
   background: radial-gradient(circle, var(--card) 0 62%, transparent 63%); border-radius: 50%; }
-.arrow { width: 72%; height: 72%; transition: transform .25s ease-out; will-change: transform; }
+.arrow { width: 72%; height: 72%; transition: transform .12s linear; will-change: transform; }
 .arrow svg { width: 100%; height: 100%; fill: var(--accent); filter: drop-shadow(0 4px 10px rgba(0,0,0,.4)); }
 .arrow.north svg { fill: var(--blue); }
 .arrow.here svg { fill: var(--go); }

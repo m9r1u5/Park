@@ -358,7 +358,12 @@
         uses the MEDIAN direction of the last WINDOW steps, so a 1–2 step
         swing is ignored. A real turn shows up after ~2 steps.
 
-     TUNING: MIN_BOUT (higher = fewer false steps, but the first steps of
+     3. STRAIGHT LINES: people walk in straight lines and turn on purpose.
+        Direction changes smaller than TURN_DEG are treated as wobble and the
+        line stays straight; a bigger change that holds is a real turn.
+
+     TUNING: TURN_DEG (bigger = straighter but small real bends are lost),
+     MIN_BOUT (higher = fewer false steps, but the first steps of
      each walk are only drawn once you've walked that many), WINDOW (higher
      = straighter lines, slower turns; keep it odd).
      ------------------------------------------------------------------- */
@@ -369,6 +374,8 @@
       this.RHYTHM = opts.rhythm ?? 0.35;     // ±35 % of the usual step gap
       this.cadence = null;                    // usual gap between steps (ms)
       this.WINDOW = opts.window ?? 5;
+      this.TURN_DEG = opts.turnDeg ?? 25;
+      this.seg = null;                         // direction of the current straight line
       this.lastT = -1e12; this.pending = []; this.recent = []; this.inBout = false;
     }
     /** Circular median: the sample with the smallest total angle to the others. */
@@ -396,7 +403,12 @@
       if (gap <= this.MAX_GAP_MS && this.cadence == null && this.pending.length) this.cadence = gap;
       const h = heading == null || heading < 0 ? null : heading;
       if (h != null) { this.recent.push(h); if (this.recent.length > this.WINDOW) this.recent.shift(); }
-      const smooth = () => (this.recent.length ? StepCleaner.median(this.recent) : null);
+      const smooth = () => {
+        if (!this.recent.length) return null;
+        const m = StepCleaner.median(this.recent);
+        if (this.seg == null || Math.abs(wrap180(m - this.seg)) > this.TURN_DEG) this.seg = m;
+        return this.seg;
+      };
       if (this.inBout) return [{ heading: h == null ? null : smooth() }];
       this.pending.push(h);
       if (this.pending.length < this.MIN_BOUT) return [];
