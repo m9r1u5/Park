@@ -8,7 +8,7 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.4';
+  const APP_VERSION = '1.0.5';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
   const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
@@ -198,6 +198,7 @@
       if (this.running) return;
       this.det = new PDR.StepDetector();
       this.hf = new PDR.HeadingFilter();
+      this.cleaner = new PDR.StepCleaner();
       if (session && session.heading != null) this.hf.heading = session.heading;
       this.running = true;
       window.addEventListener('devicemotion', this._onMotion);
@@ -240,7 +241,9 @@
       self._heading(t, null, yaw);
 
       const step = self.det.feed(t, a.x, a.y, a.z);
-      if (step && session && session.tracking) onStep(stepLength(), self.hf.heading);
+      if (step && session && session.tracking) {
+        for (const o of self.cleaner.push(t, self.hf.heading)) onStep(stepLength(), o.heading);
+      }
     },
 
     _heading(t, compass, yaw) {

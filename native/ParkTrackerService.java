@@ -142,6 +142,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
         absHeading = gameHeading = -1; offset = Double.NaN;
         p0 = pSmooth = lastBin = Double.NaN; binN = 0; binSum = 0;
         accLastT = -1; lp = prev = prev2 = 0; avgPeak = 1.6; valleySeen = true;
+        resetCleaner();
 
         registerSensors();
         lastGoodFixMs = 0; altOffset = 0;
@@ -273,10 +274,54 @@ public class ParkTrackerService extends Service implements SensorEventListener {
 
     private static double wrap180(double a) { a = ((a + 180) % 360 + 360) % 360 - 180; return a; }
 
+    /* ---------- step cleaner (same as StepCleaner in pdr.js — see comments there) ---------- */
+    // TUNING: MIN_BOUT steps in a steady rhythm before steps count; WINDOW = median of last N headings
+    private static final int MIN_BOUT = 4, WINDOW = 5;
+    private static final long MAX_GAP_MS = 1300;
+    private static final double RHYTHM = 0.35;
+    private long cLastT = -1_000_000_000L;
+    private double cadence = -1;
+    private boolean inBout = false;
+    private final java.util.ArrayList<Double> pending = new java.util.ArrayList<>();
+    private final java.util.ArrayDeque<Double> recent = new java.util.ArrayDeque<>();
+
+    private void resetCleaner() { pending.clear(); recent.clear(); inBout = false; cadence = -1; }
+
+    private static double circMedian(java.util.Collection<Double> hs) {
+        double best = -1, bestSum = Double.MAX_VALUE;
+        for (double a : hs) {
+            double sum = 0;
+            for (double b : hs) sum += Math.abs(wrap180(a - b));
+            if (sum < bestSum) { bestSum = sum; best = a; }
+        }
+        return best;
+    }
+
     private void onStep() {
+        long t = android.os.SystemClock.elapsedRealtime();
         double h;
         synchronized (st) { h = st.heading; }
-        st.step(h);
+        long gap = t - cLastT;
+        cLastT = t;
+        if (gap > MAX_GAP_MS) { resetCleaner(); }
+        else if (cadence > 0 && Math.abs(gap - cadence) > RHYTHM * cadence) {
+            if (!inBout) resetCleaner();
+        } else {
+            cadence = cadence < 0 ? gap : cadence + 0.3 * (gap - cadence);
+        }
+        if (gap <= MAX_GAP_MS && cadence < 0 && !pending.isEmpty()) cadence = gap;
+
+        if (h >= 0) { recent.addLast(h); if (recent.size() > WINDOW) recent.removeFirst(); }
+        double smooth = recent.isEmpty() ? -1 : circMedian(recent);
+        if (inBout) {
+            st.step(h < 0 ? -1 : smooth);
+        } else {
+            pending.add(h);
+            if (pending.size() < MIN_BOUT) return;
+            inBout = true;
+            for (double p : pending) st.step(p < 0 ? -1 : smooth);
+            pending.clear();
+        }
         if (st.steps - lastNotifSteps >= 10) updateNotification(false);
     }
 

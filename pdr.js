@@ -344,11 +344,76 @@
     return best;
   }
 
+  /* -------------------------------------------------------------------
+     STEP CLEANER — makes the trail look like how people really walk.
+
+     Two problems it fixes (the "squiggles"):
+     1. FIDGET STEPS: taking the phone out, turning it to read, standing at
+        a door… produce a few bumps that look like steps. Real walking comes
+        in a rhythm, so steps are held back until MIN_BOUT steps in a row
+        have arrived less than MAX_GAP_MS apart AND at a steady pace (each gap
+        within RHYTHM of the walk's usual gap). Fidgeting is irregular, so it's dropped.
+     2. HEADING SWINGS: while you handle the phone, its direction swings
+        around (even flips 180°) though you keep walking straight. Each step
+        uses the MEDIAN direction of the last WINDOW steps, so a 1–2 step
+        swing is ignored. A real turn shows up after ~2 steps.
+
+     TUNING: MIN_BOUT (higher = fewer false steps, but the first steps of
+     each walk are only drawn once you've walked that many), WINDOW (higher
+     = straighter lines, slower turns; keep it odd).
+     ------------------------------------------------------------------- */
+  class StepCleaner {
+    constructor(opts = {}) {
+      this.MIN_BOUT = opts.minBout ?? 4;
+      this.MAX_GAP_MS = opts.maxGapMs ?? 1300;
+      this.RHYTHM = opts.rhythm ?? 0.35;     // ±35 % of the usual step gap
+      this.cadence = null;                    // usual gap between steps (ms)
+      this.WINDOW = opts.window ?? 5;
+      this.lastT = -1e12; this.pending = []; this.recent = []; this.inBout = false;
+    }
+    /** Circular median: the sample with the smallest total angle to the others. */
+    static median(hs) {
+      let best = hs[0], bestSum = Infinity;
+      for (const a of hs) {
+        let sum = 0;
+        for (const b of hs) sum += Math.abs(wrap180(a - b));
+        if (sum < bestSum) { bestSum = sum; best = a; }
+      }
+      return best;
+    }
+    /** Feed one detected step. Returns the steps to draw now: [{heading}] (heading may be null). */
+    push(tMs, heading) {
+      const gap = tMs - this.lastT;
+      this.lastT = tMs;
+      if (gap > this.MAX_GAP_MS) { this.pending = []; this.recent = []; this.inBout = false; this.cadence = null; }
+      else if (this.cadence != null && Math.abs(gap - this.cadence) > this.RHYTHM * this.cadence) {
+        // out of rhythm. While walking, allow it (stairs, doors) but keep cadence;
+        // while still qualifying, start over from this step.
+        if (!this.inBout) { this.pending = []; this.recent = []; this.cadence = null; }
+      } else {
+        this.cadence = this.cadence == null ? gap : this.cadence + 0.3 * (gap - this.cadence);
+      }
+      if (gap <= this.MAX_GAP_MS && this.cadence == null && this.pending.length) this.cadence = gap;
+      const h = heading == null || heading < 0 ? null : heading;
+      if (h != null) { this.recent.push(h); if (this.recent.length > this.WINDOW) this.recent.shift(); }
+      const smooth = () => (this.recent.length ? StepCleaner.median(this.recent) : null);
+      if (this.inBout) return [{ heading: h == null ? null : smooth() }];
+      this.pending.push(h);
+      if (this.pending.length < this.MIN_BOUT) return [];
+      // walking confirmed: release the held-back steps with the bout's median direction
+      this.inBout = true;
+      const m = smooth();
+      const out = this.pending.map(p => ({ heading: p == null ? null : m }));
+      this.pending = [];
+      return out;
+    }
+  }
+
   /** Default step length from body height (cm) — common 0.415 × height rule. */
   function stepFromHeight(cm) { return Math.max(0.35, Math.min(1.1, (cm / 100) * 0.415)); }
 
   root.PDR = {
-    StepDetector, HeadingFilter, wrap180, wrap360,
+    StepDetector, HeadingFilter, StepCleaner, wrap180, wrap360,
     geoToLocal, localToGeo, bearing, simplify,
     pdrSigma, fuseFix, robustFuse, retraceTarget, stepFromHeight, DRIFT_PER_M, MIN_SIGMA
   };
