@@ -130,7 +130,8 @@ body.finding .tabbar { display: none; }
   background: radial-gradient(circle, var(--card) 0 62%, transparent 63%); border-radius: 50%; }
 .arrow { width: 72%; height: 72%; transition: transform .12s linear; will-change: transform; }
 .arrow svg { width: 100%; height: 100%; fill: var(--accent); filter: drop-shadow(0 4px 10px rgba(0,0,0,.4)); }
-.arrow.north svg { fill: var(--blue); }
+.arrow.north svg { fill: var(--muted); }
+.arrow.path svg { fill: var(--blue); }
 .arrow.here svg { fill: var(--go); }
 .arrow-note { position: absolute; bottom: -2px; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--muted); font-weight: 700; }
 .find-readout .sub { color: var(--muted); font-size: 15px; margin-top: 6px; }

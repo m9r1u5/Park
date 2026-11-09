@@ -118,6 +118,13 @@ public class ParkTrackerPlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setHeadingBias(PluginCall call) {
+        TrackerState s = TrackerState.get();
+        synchronized (s) { s.headingBias = num(call, "bias", 0); }
+        call.resolve();
+    }
+
+    @PluginMethod
     public void scheduleReminder(PluginCall call) {
         int id = (int) num(call, "id", 1);
         long at = (long) num(call, "at", 0.0);

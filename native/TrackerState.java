@@ -17,6 +17,7 @@ public final class TrackerState {
     public boolean hasBaro = false;
     public String stepSource = "none";
     public double stepLength = 0.7;
+    public double headingBias = 0;                   // compass error learned from GPS (deg)
     public boolean outdoor = false;                  // good GPS right now
     public double fixLat = 0, fixLon = 0, fixAcc = 999;
     public long fixTime = 0;                         // ms, 0 = no fix yet

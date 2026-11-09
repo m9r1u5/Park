@@ -8,10 +8,13 @@
   'use strict';
 
   /* ---------------- constants ---------------- */
-  const APP_VERSION = '1.0.6';
+  const APP_VERSION = '1.0.7';
   const PAGES_URL = 'https://m9r1u5.github.io/Park/';
   const APK_URL = 'https://github.com/m9r1u5/Park/releases/latest/download/ParkFinder.apk';
-  const GOOD_GPS_M = 15;          // GPS fixes better than this correct the trail
+  const GOOD_GPS_M = 15;          // "GPS locked" in the UI
+  const USE_GPS_M = 50;           // fixes up to this accuracy still help (weighted by accuracy)
+  const COURSE_GPS_M = 15;        // fixes this good are used to learn the compass error
+  const COURSE_MIN_M = 15;        // straight walk needed to measure a GPS course
   const ARRIVE_M = 5;
   const MAX_POINTS = 20000;
   const MAX_HISTORY = 20;
@@ -28,6 +31,12 @@
 
   const $ = id => document.getElementById(id);
   const now = () => Date.now();
+
+  function circMean(degs) {
+    let sx = 0, sy = 0;
+    for (const d of degs) { sx += Math.sin(d * Math.PI / 180); sy += Math.cos(d * Math.PI / 180); }
+    return PDR.wrap360(Math.atan2(sx, sy) * 180 / Math.PI);
+  }
 
   /* ---------------- small storage helpers ---------------- */
   const LS = {
@@ -242,13 +251,15 @@
 
       const step = self.det.feed(t, a.x, a.y, a.z);
       if (step && session && session.tracking) {
-        for (const o of self.cleaner.push(t, self.hf.heading)) onStep(stepLength(), o.heading);
+        Gps.lastStepAt = now();
+        const hb = self.hf.heading == null ? null : PDR.wrap360(self.hf.heading + (session.headingBias || 0));
+        for (const o of self.cleaner.push(t, hb)) onStep(stepLength(), o.heading);
       }
     },
 
     _heading(t, compass, yaw) {
       const h = this.hf.update(t, compass, yaw);
-      if (session && h != null) session.heading = h;
+      if (session && h != null) { session.rawHeading = h; session.heading = PDR.wrap360(h + (session.headingBias || 0)); }
     }
   };
   JsTracker._onMotion = JsTracker._onMotion.bind(JsTracker);
@@ -303,6 +314,7 @@
           x: session.x, y: session.y, steps: session.steps, dist: session.dist,
           heading: session.heading == null ? -1 : session.heading
         });
+        Native.setHeadingBias({ bias: session.headingBias || 0 }).catch(() => { });
       } catch (e) {
         toast('Background tracking failed: ' + (e.message || e) + '. Using in-app sensors.');
         tracker = JsTracker; JsTracker.start(); return;
@@ -334,7 +346,8 @@
       session.nativeIdx = s.total;
       session.x = s.x; session.y = s.y;
       session.steps = s.steps; session.dist = s.dist;
-      session.heading = s.heading >= 0 ? s.heading : session.heading;
+      if (s.heading >= 0) { session.rawHeading = s.heading; session.heading = PDR.wrap360(s.heading + (session.headingBias || 0)); }
+      if (s.steps > (session.steps || 0)) Gps.lastStepAt = now();
       session.floorAuto = s.floor || 0;
       session.hasBaro = !!s.hasBaro;
       session.stepSource = s.stepSource;
@@ -366,24 +379,80 @@
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
     },
     stop() { if (this.watchId != null) navigator.geolocation.clearWatch(this.watchId); this.watchId = null; },
+
+    /**
+     * COMPASS CALIBRATION FROM GPS. Near steel (tanks, racks, cars) the compass
+     * can be 30–90° out. When you walk a straight 20 m+ outdoors, GPS tells us
+     * which way you really went. The difference from what the compass said is
+     * the local compass error: used for the step trail AND the Find arrow.
+     */
+    samples: [],
+    learnCourse(fix) {
+      if (!session || !session.carGeo || fix.acc > COURSE_GPS_M) return;
+      const g = PDR.geoToLocal(session.carGeo.lat, session.carGeo.lon, fix.lat, fix.lon);
+      const walking = now() - (this.lastStepAt || 0) < 2000;
+      const live = LiveCompass.fresh() ? LiveCompass.rawH : null;
+      const S = this.samples;
+      S.push({ t: fix.t, x: g.x, y: g.y, h: session.rawHeading != null ? session.rawHeading : null, ch: live, walking });
+      while (S.length && fix.t - S[0].t > 25000) S.shift();
+      // oldest sample far enough back
+      let i0 = -1;
+      for (let i = 0; i < S.length - 2; i++) if (Math.hypot(g.x - S[i].x, g.y - S[i].y) >= COURSE_MIN_M) { i0 = i; }
+      if (i0 < 0) return;
+      const A = S[i0], win = S.slice(i0);
+      if (!win.every(p => p.walking)) return;
+      const L = Math.hypot(g.x - A.x, g.y - A.y);
+      // straight? every point within 4 m of the line A→now
+      const straight = win.every(p => Math.abs((g.y - A.y) * (p.x - A.x) - (g.x - A.x) * (p.y - A.y)) / L < 4);
+      if (!straight) return;
+      const course = PDR.bearing(A.x, A.y, g.x, g.y);
+      const upd = (key, vals) => {
+        vals = vals.filter(v => v != null);
+        if (vals.length < 3) return;
+        const err = PDR.wrap180(course - circMean(vals));
+        const n = (session[key + 'N'] || 0);
+        const cur = session[key] || 0;
+        // first measurement is taken in full; later ones refine it
+        session[key] = PDR.wrap180(cur + (n === 0 ? 1 : 0.5) * PDR.wrap180(err - cur));
+        session[key + 'N'] = n + 1;
+      };
+      upd('headingBias', win.map(p => p.h));
+      upd('arrowBias', win.map(p => p.ch));
+      if (tracker === NativeTracker && Native) Native.setHeadingBias({ bias: session.headingBias || 0 }).catch(() => { });
+      this.samples = [S[S.length - 1]];          // start a fresh measurement
+    },
+
     _fix(p) {
       const fix = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: p.timestamp || now() };
       this.last = fix;
       parkSheetGps(fix);
       if (!session || !session.tracking) return;
 
-      // first fix at the car (before walking off) → this IS the car position
-      if (!session.gps || (fix.acc < session.gps.acc && session.steps < 8)) {
-        if (session.steps < 8) session.gps = fix;
+      // Still standing at the car: a better fix = a better car position.
+      if (session.steps < 8 && (!session.gps || fix.acc < session.gps.acc)) {
+        session.gps = fix;
+        if (fix.acc <= USE_GPS_M) session.carGeo = { lat: fix.lat, lon: fix.lon, acc: fix.acc, src: 'gps' };
       }
-      if (fix.acc > GOOD_GPS_M) return;     // too weak to correct anything
+      if (fix.acc > USE_GPS_M) return;      // too weak to help
 
       const sigmaP = sigmaNow();
+      this.learnCourse(fix);
       if (!session.carGeo) {
-        // We now know where we are; we know where the car is relative to us
-        // (from the steps). So we can place the car on the real map.
+        // We now know where we are and (from the steps) where the car is relative
+        // to us → place the car on the real map. If there was a weak GPS reading
+        // at the car, blend it in, weighted by how good each estimate is.
         const g = PDR.localToGeo(fix.lat, fix.lon, -session.x, -session.y);
-        session.carGeo = { lat: g.lat, lon: g.lon, acc: Math.hypot(fix.acc, sigmaP), src: session.steps < 8 ? 'gps' : 'derived' };
+        let lat = g.lat, lon = g.lon, acc = Math.hypot(fix.acc, sigmaP);
+        const pk = session.gps;
+        if (pk && pk.acc < 150) {
+          const w = (acc * acc) / (acc * acc + pk.acc * pk.acc);     // weight of the parking fix
+          lat += w * (pk.lat - lat); lon += w * (pk.lon - lon);
+          acc = Math.sqrt((acc * acc * pk.acc * pk.acc) / (acc * acc + pk.acc * pk.acc));
+          // our position relative to the (moved) car changes accordingly
+          const p2 = PDR.geoToLocal(lat, lon, fix.lat, fix.lon);
+          applyCorrection(p2.x - session.x, p2.y - session.y);
+        }
+        session.carGeo = { lat, lon, acc, src: session.steps < 8 ? 'gps' : 'derived' };
         session.sigmaBase = Math.min(sigmaP, fix.acc); session.distAtFix = session.dist;
       } else {
         // Same reading delivered twice (phone GPS + background service)? Use it once.
@@ -545,7 +614,7 @@
     const recent = Gps.last && now() - Gps.last.t < 30000 ? Gps.last : null;
     if (recent) {
       fields.gps = recent;
-      if (recent.acc <= GOOD_GPS_M) {
+      if (recent.acc <= USE_GPS_M) {
         fields.carGeo = { lat: recent.lat, lon: recent.lon, acc: recent.acc, src: 'gps' };
         fields.sigmaBase = 1.5; fields.lastFixAt = now(); fields.lastFixAcc = recent.acc;
       }
@@ -723,7 +792,7 @@
       retrace.wps = PDR.simplify(pts, 5);
       retrace.wps[0] = { x: 0, y: 0 };            // always end exactly at the car
       retrace.target = retrace.wps.length - 1;    // updateFind picks the real target (with shortcuts)
-      toast('Retrace: follow the arrow back the way you came. Loops you don\'t need are skipped.');
+      toast('Retrace on: the BLUE arrow now points to the next turn of your path, not the car. Tap again to point at the car.', 5000);
     }
     render();
   });
@@ -736,7 +805,7 @@
      (held flat) or the way the back points (held upright facing you).
      --------------------------------------------------------------- */
   const LiveCompass = {
-    h: null, t: 0, on: false,
+    h: null, rawH: null, t: 0, on: false,
     start() {
       if (this.on) return; this.on = true;
       if ('ondeviceorientationabsolute' in window) window.addEventListener('deviceorientationabsolute', this.onEv);
@@ -756,7 +825,8 @@
       const so = (screen.orientation && screen.orientation.angle) || 0;   // landscape support
       raw = PDR.wrap360(raw + so);
       // light smoothing (keeps it steady without feeling laggy)
-      LiveCompass.h = LiveCompass.h == null ? raw : PDR.wrap360(LiveCompass.h + 0.35 * PDR.wrap180(raw - LiveCompass.h));
+      LiveCompass.rawH = LiveCompass.rawH == null ? raw : PDR.wrap360(LiveCompass.rawH + 0.35 * PDR.wrap180(raw - LiveCompass.rawH));
+      LiveCompass.h = PDR.wrap360(LiveCompass.rawH + ((session && session.arrowBias) || 0));
       LiveCompass.t = performance.now();
       if (currentScreen === 'find') drawArrow();
     }
@@ -769,7 +839,10 @@
     if (lastBrg == null || arrowMode === 'here') return;
     const h = LiveCompass.fresh() ? LiveCompass.h : (session && session.heading);
     let target;
-    if (h != null) { arrowEl.className = 'arrow'; target = lastBrg - h; $('arrow-note').textContent = ''; }
+    if (h != null) {
+      arrowEl.className = retrace.on ? 'arrow path' : 'arrow'; target = lastBrg - h;
+      $('arrow-note').textContent = retrace.on ? 'Next turn' : '';
+    }
     else { arrowEl.className = 'arrow north'; target = lastBrg; $('arrow-note').textContent = 'No compass · north-up'; }
     arrowAngle += PDR.wrap180(target - arrowAngle);       // shortest turn, no 359→0 spin
     arrowEl.style.transform = `rotate(${arrowAngle}deg)`;
@@ -781,6 +854,8 @@
     const directDist = Math.hypot(x, y);
     let tx = 0, ty = 0, remain = directDist, wpNote = '';
     const sigma = sigmaNow();
+    // uncertainty shown also includes how sure we are of where the CAR is
+    const sigmaShown = session.carGeo && now() - (session.lastFixAt || 0) < 120000 ? Math.hypot(sigma, session.carGeo.acc || 0) : sigma;
     if (retrace.on && retrace.wps.length > 1) {
       // "near" grows with the position uncertainty, between 8 and 25 m
       const snap = Math.max(8, Math.min(25, sigma));
@@ -789,7 +864,7 @@
       tx = retrace.wps[tgt].x; ty = retrace.wps[tgt].y;
       remain = Math.hypot(tx - x, ty - y);
       for (let i = tgt; i > 0; i--) remain += Math.hypot(retrace.wps[i].x - retrace.wps[i - 1].x, retrace.wps[i].y - retrace.wps[i - 1].y);
-      wpNote = tgt > 0 ? `${tgt} turn${tgt > 1 ? 's' : ''} to go · next in ${fmtDist(Math.hypot(tx - x, ty - y))}` : 'Last stretch to the car';
+      wpNote = tgt > 0 ? `next turn in ${fmtDist(Math.hypot(tx - x, ty - y))}` : 'last stretch';
     }
     const brg = PDR.bearing(x, y, tx, ty);
     lastBrg = brg;
@@ -802,11 +877,13 @@
       drawArrow();
     }
 
-    $('find-dist').textContent = directDist < ARRIVE_M ? 'Here!' : fmtDist(remain);
+    // big number = always the straight-line distance to the CAR
+    $('find-dist').textContent = directDist < ARRIVE_M ? 'Here!' : fmtDist(directDist);
     let sub;
     if (directDist < ARRIVE_M) sub = 'Look around for your car.';
     else if (directDist < sigma) sub = `Within ±${fmtDist(sigma)} — start looking around.`;
-    else sub = retrace.on ? wpNote : `${fmtDist(directDist)} straight-line · ±${fmtDist(sigma)}`;
+    else sub = retrace.on ? `Following your path · ${wpNote} · ${fmtDist(remain)} by path`
+                          : `to your car · ±${fmtDist(sigmaShown)}`;
     $('find-sub').textContent = sub;
     if (directDist < ARRIVE_M && !arrived) { arrived = true; buzz([80, 60, 80]); }
     if (directDist > ARRIVE_M * 2) arrived = false;
@@ -818,9 +895,10 @@
     const m = posMode();
     const pill = $('acc-pill');
     pill.className = 'pill ' + m;
-    pill.textContent = (m === 'gps' ? 'GPS' : m === 'mixed' ? 'Mixed' : 'Steps') + ' ±' + fmtDist(sigma);
+    pill.textContent = (m === 'gps' ? 'GPS' : m === 'mixed' ? 'Mixed' : 'Steps') + ' ±' + fmtDist(sigmaShown);
     $('btn-maps').hidden = !session.carGeo || !navigator.onLine;
-    $('map-legend').textContent = map.gridStep ? `Grid ${fmtDist(map.gridStep)}` : '';
+    $('map-legend').textContent = (map.gridStep ? `Grid ${fmtDist(map.gridStep)}` : '') + (retrace.on ? ' · ● next turn' : '') +
+      (session.arrowBias ? ` · compass corrected ${Math.round(session.arrowBias)}°` : '');
 
     map.set({
       points: session.points, me: { x, y, heading: h, sigma },

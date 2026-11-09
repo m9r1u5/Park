@@ -330,7 +330,7 @@ public class ParkTrackerService extends Service implements SensorEventListener {
     private void onStep() {
         long t = android.os.SystemClock.elapsedRealtime();
         double h;
-        synchronized (st) { h = st.heading; }
+        synchronized (st) { h = st.heading; if (h >= 0) h = (h + st.headingBias + 360) % 360; }   // compass error learned from GPS
         if (inPocket && h >= 0) {
             if (anchorPending) {
                 if (t >= anchorAt && seg >= 0) { headingCorr = wrap180(seg - h); anchorPending = false; }
